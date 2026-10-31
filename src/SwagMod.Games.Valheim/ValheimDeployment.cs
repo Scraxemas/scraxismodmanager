@@ -14,6 +14,7 @@ namespace SwagMod.Games.Valheim;
 public sealed class ValheimDeployment(VerifiedDownloadCache cache, string storageRoot)
 {
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web) { WriteIndented = true };
+    private static readonly string[] RootDirectories = ["doorstop_libs", "unstripped_corlib"];
 
     private string LedgerPath(string game)
     {
@@ -50,7 +51,8 @@ public sealed class ValheimDeployment(VerifiedDownloadCache cache, string storag
         var bepinex = Path.Combine(game, "BepInEx");
         var previous = GetState(game);
         if (previous is null && (Directory.Exists(bepinex) || File.Exists(Path.Combine(game, "winhttp.dll")) ||
-                                  File.Exists(Path.Combine(game, "doorstop_config.ini"))))
+                                  File.Exists(Path.Combine(game, "doorstop_config.ini")) ||
+                                  RootDirectories.Any(d => Directory.Exists(Path.Combine(game, d)))))
             throw new IOException("Unmanaged BepInEx files detected. Move them aside or import them before installing.");
         if (previous is not null)
         {
@@ -85,6 +87,8 @@ public sealed class ValheimDeployment(VerifiedDownloadCache cache, string storag
             // Record the exact staged files, allowing the next update to reject
             // unowned additions and manual edits without deleting them.
             var stagedHashes = HashTree(Path.Combine(candidate, "BepInEx"));
+            var stagedRootHashes = RootDirectories.Where(d => Directory.Exists(Path.Combine(candidate, d)))
+                .ToDictionary(d => d, d => HashTree(Path.Combine(candidate, d)), StringComparer.OrdinalIgnoreCase);
             if (stagedHashes.Count == 0) throw new InvalidDataException("Empty BepInEx payload.");
             ct.ThrowIfCancellationRequested();
             progress?.Report(new("Commit", "Activating verified profile", 0.9));
@@ -92,7 +96,8 @@ public sealed class ValheimDeployment(VerifiedDownloadCache cache, string storag
             Directory.CreateDirectory(backupRoot);
             var oldLive = Path.Combine(profile, "live");
             var previousLive = Path.Combine(backupRoot, "previous-live");
-            var oldPhysical = Path.Combine(backupRoot, "old-game-BepInEx");
+            var gameBackupRoot = Path.Combine(game, ".swagmod-rollback-" + Guid.NewGuid().ToString("N"));
+            var oldPhysical = Path.Combine(gameBackupRoot, "old-game-BepInEx");
             var oldBootstrap = Path.Combine(backupRoot, "bootstrap");
             Directory.CreateDirectory(oldBootstrap);
             string? newTempBep = null;
@@ -101,10 +106,16 @@ public sealed class ValheimDeployment(VerifiedDownloadCache cache, string storag
             {
                 if (previous is not null)
                 {
+                    Directory.CreateDirectory(gameBackupRoot);
                     // Save bootstrap files for rollback.
                     foreach (var filename in new[] { "winhttp.dll", "doorstop_config.ini" })
                         if (File.Exists(Path.Combine(game, filename)))
                             File.Copy(Path.Combine(game, filename), Path.Combine(oldBootstrap, filename), true);
+                    foreach (var folder in RootDirectories)
+                    {
+                        var activeRoot = Path.Combine(game, folder);
+                        if (Directory.Exists(activeRoot)) Directory.Move(activeRoot, Path.Combine(gameBackupRoot, folder));
+                    }
                     if (Directory.Exists(bepinex))
                     {
                         if (previous.Mode == DeploymentMode.Isolated)
@@ -130,6 +141,9 @@ public sealed class ValheimDeployment(VerifiedDownloadCache cache, string storag
                     Directory.Move(newTempBep, bepinex);
                     newTempBep = null;
                 }
+                foreach (var folder in RootDirectories)
+                    if (Directory.Exists(Path.Combine(oldLive, folder)))
+                        CopyTree(Path.Combine(oldLive, folder), Path.Combine(game, folder));
                 foreach (var filename in new[] { "winhttp.dll", "doorstop_config.ini" })
                     File.Copy(Path.Combine(oldLive, filename), Path.Combine(game, filename), true);
 
@@ -140,6 +154,7 @@ public sealed class ValheimDeployment(VerifiedDownloadCache cache, string storag
                     GameDirectory = game,
                     ProfileDirectory = profile,
                     BepInExHashes = stagedHashes,
+                    RootDirectoryHashes = stagedRootHashes,
                     BootstrapHashes = new Dictionary<string, string> {
                         ["winhttp.dll"] = HashFile(Path.Combine(game, "winhttp.dll")),
                         ["doorstop_config.ini"] = HashFile(Path.Combine(game, "doorstop_config.ini"))
@@ -167,6 +182,13 @@ public sealed class ValheimDeployment(VerifiedDownloadCache cache, string storag
                     }
                     if (Directory.Exists(oldLive)) Directory.Delete(oldLive, true);
                     if (Directory.Exists(previousLive)) Directory.Move(previousLive, oldLive);
+                }
+                foreach (var folder in RootDirectories)
+                {
+                    var activeRoot = Path.Combine(game, folder);
+                    if (changedGame && Directory.Exists(activeRoot)) Directory.Delete(activeRoot, true);
+                    var oldRoot = Path.Combine(gameBackupRoot, folder);
+                    if (Directory.Exists(oldRoot)) Directory.Move(oldRoot, activeRoot);
                 }
                 if (Directory.Exists(oldPhysical)) Directory.Move(oldPhysical, bepinex);
                 else if (previous is not null && previous.Mode == DeploymentMode.Isolated &&
@@ -199,6 +221,21 @@ public sealed class ValheimDeployment(VerifiedDownloadCache cache, string storag
             actual.Any(kv => !state.BepInExHashes.TryGetValue(kv.Key, out var hash) ||
                              !hash.Equals(kv.Value, StringComparison.OrdinalIgnoreCase)))
             throw new IOException("BepInEx files have changed outside SwagMod; backup or reconcile them before updating.");
+        foreach (var folder in RootDirectories)
+        {
+            var location = Path.Combine(state.GameDirectory, folder);
+            var owned = state.RootDirectoryHashes.TryGetValue(folder, out var expected);
+            if (Directory.Exists(location) != owned)
+                throw new IOException("Unmanaged or missing loader directory: " + folder);
+            if (owned)
+            {
+                if (new DirectoryInfo(location).Attributes.HasFlag(FileAttributes.ReparsePoint))
+                    throw new IOException("Loader directory has an unmanaged reparse point: " + folder);
+                var actualRoot = HashTree(location);
+                if (actualRoot.Count != expected!.Count || actualRoot.Any(kv => !expected.TryGetValue(kv.Key, out var hash) || hash != kv.Value))
+                    throw new IOException("Loader support files have changed: " + folder);
+            }
+        }
         foreach (var (file, hash) in state.BootstrapHashes)
             if (!File.Exists(Path.Combine(state.GameDirectory, file)) ||
                 !HashFile(Path.Combine(state.GameDirectory, file)).Equals(hash, StringComparison.OrdinalIgnoreCase))
@@ -249,5 +286,6 @@ public sealed class InstalledState
     public string GameDirectory { get; set; } = "";
     public string ProfileDirectory { get; set; } = "";
     public Dictionary<string, string> BepInExHashes { get; set; } = new(StringComparer.OrdinalIgnoreCase);
+    public Dictionary<string, Dictionary<string, string>> RootDirectoryHashes { get; set; } = new(StringComparer.OrdinalIgnoreCase);
     public Dictionary<string, string> BootstrapHashes { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 }
