@@ -268,9 +268,9 @@ public sealed class ValheimDeployment(VerifiedDownloadCache cache, string storag
             UseShellExecute = false, CreateNoWindow = true,
             RedirectStandardError = true, RedirectStandardOutput = true
         };
-        start.ArgumentList.Add("/d");
-        start.ArgumentList.Add("/c");
-        start.ArgumentList.Add($"mklink /J \"{junction}\" \"{target}\"");
+        // cmd.exe requires the /c command as a single command line, with
+        // native cmd quoting rather than ProcessStartInfo.ArgumentList quoting.
+        start.Arguments = $"/d /c mklink /J \"{junction}\" \"{target}\"";
         using var process = Process.Start(start) ?? throw new IOException("Unable to start junction creator.");
         process.WaitForExit();
         if (process.ExitCode != 0 || !Directory.Exists(junction))
