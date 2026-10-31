@@ -84,6 +84,34 @@ public sealed class ValheimDeploymentTests
         finally { CleanFixture(root, game); }
     }
 
+    [Theory]
+    [InlineData(DeploymentMode.Isolated)]
+    [InlineData(DeploymentMode.Direct)]
+    public async Task RepairPreservesRuntimeConfiguration(DeploymentMode mode)
+    {
+        if (!OperatingSystem.IsWindows()) return;
+        var root = NewFixture(out var game);
+        try
+        {
+            var zip = LoaderZip();
+            using var http = new HttpClient(new FakeZipHandler(zip));
+            var deploy = new ValheimDeployment(
+                new VerifiedDownloadCache(http, Path.Combine(root, "cache")),
+                Path.Combine(root, "state"));
+            var pack = MakePack(zip);
+            var plan = deploy.Plan(pack, game, mode);
+            await deploy.InstallAsync(pack, plan);
+            var configFile = Path.Combine(game, "BepInEx", "config", "user.cfg");
+            Directory.CreateDirectory(Path.GetDirectoryName(configFile)!);
+            File.WriteAllText(configFile, "my personalized settings");
+            File.WriteAllText(Path.Combine(game, "BepInEx", "LogOutput.log"), "runtime log");
+            await deploy.InstallAsync(pack, plan);
+            Assert.Equal("my personalized settings", File.ReadAllText(configFile));
+            Assert.True(File.Exists(Path.Combine(game, "BepInEx", "core", "core.dll")));
+        }
+        finally { CleanFixture(root, game); }
+    }
+
     private static string NewFixture(out string game)
     {
         var root = Path.Combine(Path.GetTempPath(), "SwagMod Tests " + Guid.NewGuid().ToString("N"));
