@@ -84,6 +84,19 @@ public sealed class ValheimDeployment(VerifiedDownloadCache cache, string storag
                 !File.Exists(Path.Combine(candidate, "doorstop_config.ini")))
                 throw new InvalidDataException("BepInEx loader archive did not contain expected Windows bootstrap files.");
 
+            // Runtime-generated configs are user data, not disposable pack content.
+            // Preserve them over newly supplied defaults during a managed update.
+            if (previous is not null)
+            {
+                var existingConfig = Path.Combine(bepinex, "config");
+                if (Directory.Exists(existingConfig))
+                {
+                    if (new DirectoryInfo(existingConfig).Attributes.HasFlag(FileAttributes.ReparsePoint))
+                        throw new IOException("Refusing to import config directory junctions.");
+                    CopyTree(existingConfig, Path.Combine(candidate, "BepInEx", "config"), overwrite: true);
+                }
+            }
+
             // Record the exact staged files, allowing the next update to reject
             // unowned additions and manual edits without deleting them.
             var stagedHashes = HashTree(Path.Combine(candidate, "BepInEx"));
@@ -217,9 +230,12 @@ public sealed class ValheimDeployment(VerifiedDownloadCache cache, string storag
         var path = Path.Combine(state.GameDirectory, "BepInEx");
         if (!Directory.Exists(path)) throw new IOException("Managed BepInEx directory is missing; do not overwrite until recovered.");
         var actual = HashTree(path);
-        if (actual.Count != state.BepInExHashes.Count ||
-            actual.Any(kv => !state.BepInExHashes.TryGetValue(kv.Key, out var hash) ||
-                             !hash.Equals(kv.Value, StringComparison.OrdinalIgnoreCase)))
+        // BepInEx writes configs, caches and logs at runtime. Those paths are
+        // intentionally mutable; unexpected plugin/core changes are not.
+        if (actual.Any(kv => !IsMutableBepInExFile(kv.Key) &&
+                            (!state.BepInExHashes.TryGetValue(kv.Key, out var hash) ||
+                             !hash.Equals(kv.Value, StringComparison.OrdinalIgnoreCase))) ||
+            state.BepInExHashes.Keys.Any(key => !IsMutableBepInExFile(key) && !actual.ContainsKey(key)))
             throw new IOException("BepInEx files have changed outside SwagMod; backup or reconcile them before updating.");
         foreach (var folder in RootDirectories)
         {
@@ -242,21 +258,31 @@ public sealed class ValheimDeployment(VerifiedDownloadCache cache, string storag
                 throw new IOException("Managed loader bootstrap changed outside SwagMod: " + file);
     }
 
+    private static bool IsMutableBepInExFile(string key) =>
+        key.StartsWith("config/", StringComparison.OrdinalIgnoreCase) ||
+        key.StartsWith("cache/", StringComparison.OrdinalIgnoreCase) ||
+        key.StartsWith("logs/", StringComparison.OrdinalIgnoreCase) ||
+        key.Equals("LogOutput.log", StringComparison.OrdinalIgnoreCase) ||
+        key.StartsWith("LogOutput.log.", StringComparison.OrdinalIgnoreCase);
+
     private static Dictionary<string, string> HashTree(string root) =>
         Directory.GetFiles(root, "*", SearchOption.AllDirectories)
             .ToDictionary(x => Path.GetRelativePath(root, x).Replace('\\', '/'),
                 HashFile, StringComparer.OrdinalIgnoreCase);
 
-    private static string HashFile(string file) =>
-        Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(file))).ToLowerInvariant();
+    private static string HashFile(string file)
+    {
+        using var stream = File.OpenRead(file);
+        return Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
+    }
 
-    private static void CopyTree(string source, string target)
+    private static void CopyTree(string source, string target, bool overwrite = false)
     {
         foreach (var file in Directory.GetFiles(source, "*", SearchOption.AllDirectories))
         {
             var dest = Path.Combine(target, Path.GetRelativePath(source, file));
             Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
-            File.Copy(file, dest);
+            File.Copy(file, dest, overwrite);
         }
     }
 
