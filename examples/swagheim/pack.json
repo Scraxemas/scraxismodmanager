@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "pack": {
+    "id": "swagheim",
+    "name": "Swagheim Example",
+    "version": "0.1.0"
+  },
+  "game": {
+    "id": "valheim",
+    "platform": "steam",
+    "appId": "892970"
+  },
+  "description": "Safe sample for testing manifest loading. Not an installable modpack."
+}

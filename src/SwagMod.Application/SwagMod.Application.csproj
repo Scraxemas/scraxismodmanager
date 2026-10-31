@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="../SwagMod.Domain/SwagMod.Domain.csproj" />
+    <ProjectReference Include="../SwagMod.Infrastructure/SwagMod.Infrastructure.csproj" />
+    <ProjectReference Include="../SwagMod.Games.Valheim/SwagMod.Games.Valheim.csproj" />
+  </ItemGroup>
+</Project>

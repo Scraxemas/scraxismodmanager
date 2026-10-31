@@ -1,0 +1,5 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="../SwagMod.Domain/SwagMod.Domain.csproj" />
+  </ItemGroup>
+</Project>
