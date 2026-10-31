@@ -30,7 +30,7 @@ public static class SafeArchive
                 // Find the loader's actual game-root payload even when nested
                 // inside Thunderstore's package wrapper.
                 var parts = entry.FullName.Split('/', StringSplitOptions.RemoveEmptyEntries);
-                var index = Array.FindIndex(parts, x => x.Equals("BepInEx", StringComparison.OrdinalIgnoreCase));
+                var index = Array.FindIndex(parts, x => x.Equals("BepInEx", StringComparison.OrdinalIgnoreCase) || x.Equals("doorstop_libs", StringComparison.OrdinalIgnoreCase) || x.Equals("unstripped_corlib", StringComparison.OrdinalIgnoreCase));
                 if (index >= 0)
                     relative = Path.Combine(parts.Skip(index).ToArray());
                 else
