@@ -6,5 +6,6 @@
     <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
     <ProjectReference Include="../../src/SwagMod.Domain/SwagMod.Domain.csproj" />
     <ProjectReference Include="../../src/SwagMod.Infrastructure/SwagMod.Infrastructure.csproj" />
+    <ProjectReference Include="../../src/SwagMod.Games.Valheim/SwagMod.Games.Valheim.csproj" />
   </ItemGroup>
 </Project>
